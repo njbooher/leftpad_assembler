@@ -1,2 +1,2 @@
 default:
-	clang -O3 -Wall -m64 -lz -o leftpad_assembler main.c
+	gcc -O3 -Wall -m64 -lz -lz4 -o leftpad_assembler xxhash.c lz4stream.c main.c
