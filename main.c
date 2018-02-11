@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
   char *anchor_str = argv[2];
   uint8_t anchor_str_len = strlen(anchor_str);
 
-  char *rev_anchor_str = calloc(sizeof(char), anchor_str_len);
+  char rev_anchor_str[256];
   strcpy(rev_anchor_str, anchor_str);
   reverse_complement(rev_anchor_str, anchor_str_len);
 
