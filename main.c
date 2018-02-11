@@ -40,8 +40,6 @@ int main(int argc, char *argv[]) {
 
   uint8_t read_pad = 0;
 
-  match matching_read;
-
   kvec_t(match) matching_reads;
   kv_init(matching_reads);
 
@@ -57,8 +55,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (anchor_pos != NULL) {
-      matching_read.anchor_pos = (anchor_pos - seq->seq.s);
-      matching_read.seq_str_len = seq->seq.l;
+      match matching_read = { .anchor_pos = (anchor_pos - seq->seq.s), .seq_str_len = seq->seq.l };
       strcpy(matching_read.seq_str, seq->seq.s);
       kv_push(match, matching_reads, matching_read);
       read_pad = (read_pad > matching_read.anchor_pos) ? read_pad : matching_read.anchor_pos;
@@ -71,7 +68,7 @@ int main(int argc, char *argv[]) {
   printf("%*s\n", read_pad + anchor_str_len, anchor_str);
 
   while (kv_size(matching_reads) > 0) {
-    matching_read = kv_pop(matching_reads);
+    match matching_read = kv_pop(matching_reads);
     uint8_t aligned_read_start_pos = (read_pad > matching_read.anchor_pos) ? read_pad - matching_read.anchor_pos : 0;
     printf("%*s\n", aligned_read_start_pos + matching_read.seq_str_len, matching_read.seq_str);
   }
