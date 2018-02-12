@@ -4,8 +4,10 @@
 #include <string.h>
 #include "kseq.h"
 #include "kvec.h"
+#include "lz4file.h"
 #include "seqtk.h"
-KSEQ_INIT(gzFile, gzread)
+
+KSEQ_INIT(lz4File, lz4read, LZ4FILE_BUFFER_SIZE)
 
 typedef struct
 {
@@ -35,7 +37,7 @@ int main(int argc, char *argv[]) {
   strcpy(rev_anchor_str, anchor_str);
   reverse_complement(rev_anchor_str, anchor_str_len);
 
-  gzFile input_file = gzopen(argv[1], "r");
+  lz4File input_file = lz4open(argv[1], "r");
   kseq_t *seq = kseq_init(input_file);
 
   uint8_t read_pad = 0;
@@ -76,7 +78,7 @@ int main(int argc, char *argv[]) {
   kv_destroy(matching_reads);
 
   kseq_destroy(seq);
-  gzclose(input_file);
+  lz4close(input_file);
 
   return 0;
 
