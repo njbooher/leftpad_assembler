@@ -4,8 +4,6 @@
 #include <stdbool.h>
 #include <lz4frame.h>
 
-#define LZ4FILE_BUFFER_SIZE (64 * (1 << 10))
-
 typedef struct {
   FILE *src;
   bool src_eof;

@@ -43,6 +43,7 @@
 *****************************/
 #define MAGICNUMBER_SIZE    4
 #define LZ4IO_MAGICNUMBER   0x184D2204
+#define LZ4FILE_BUFFER_SIZE (64 * (1 << 10))
 
 /**************************************
 *  Macros
@@ -86,18 +87,16 @@ lz4File lz4open(const char *path, const char *mode) {
   file->src_buf = malloc(file->src_buf_size);
   if (!file->src_buf) EXM_THROW(61, "Allocation error : not enough memory");
 
-  size_t src_read_size = fread(file->src_buf, 1, MAGICNUMBER_SIZE, file->src);
+  size_t src_read_size = fread(file->src_buf, 1, file->src_buf_size, file->src);
   file->src_eof = (src_read_size == 0);
 
-  if (src_read_size != MAGICNUMBER_SIZE) {
+  if (src_read_size < MAGICNUMBER_SIZE) {
     EXM_THROW(40, "Unrecognized header : Magic Number unreadable");
   }
 
   if (le32toh(*(uint32_t *)file->src_buf) != LZ4IO_MAGICNUMBER) {
     EXM_THROW(44,"Unrecognized header : file cannot be decoded");   /* Wrong magic number at the beginning of 1st stream */
   }
-
-  file->src_buf_consumed = src_read_size;
 
   size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
   file->lz4_next_read_size = LZ4F_getFrameInfo(file->ctx, &(file->frame_info), (char*)(file->src_buf) + file->src_buf_consumed, &lz4_src_size_in_consumed_out);
