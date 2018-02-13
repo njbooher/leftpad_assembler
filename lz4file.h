@@ -1,6 +1,7 @@
 #ifndef LZ4FILE_H
 #define LZ4FILE_H
 
+#include <stdbool.h>
 #include <lz4frame.h>
 
 #define LZ4FILE_BUFFER_SIZE (64 * (1 << 10))
