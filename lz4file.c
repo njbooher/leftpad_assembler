@@ -85,6 +85,8 @@ lz4File lz4open(const char *path, const char *mode) {
   /* Allocate Memory */
   file->src_buf_size = LZ4FILE_BUFFER_SIZE;
   file->src_buf = malloc(file->src_buf_size);
+  file->src_buf_consumed = 0;
+
   if (!file->src_buf) EXM_THROW(61, "Allocation error : not enough memory");
 
   size_t src_read_size = fread(file->src_buf, 1, file->src_buf_size, file->src);
@@ -107,27 +109,58 @@ lz4File lz4open(const char *path, const char *mode) {
 
 }
 
+size_t _fill_src_buf(lz4File file) {
+  // Refill source buffer
+  size_t src_read_size_wanted = (file->lz4_next_read_size > file->src_buf_size) ? file->src_buf_size : file->lz4_next_read_size;
+  printf("_file_src_buf: src_read_size_wanted = %d\n", src_read_size_wanted);
+  size_t src_read_size = fread(file->src_buf, 1, src_read_size_wanted, file->src);
+  printf("_file_src_buf: src_read_size = %d\n", src_read_size);
+  /* can be out because readSize == 0, which could be an fread() error */
+  if (ferror(file->src)) EXM_THROW(67, "Read error");
+  file->src_eof = (src_read_size == 0);
+  file->src_buf_consumed = 0;
+  return src_read_size;
+}
+
 int lz4read(lz4File file, void *buf, unsigned int len) {
+
+  printf("\n\nlz4read: called\n");
 
   if (file->src_eof && file->lz4_next_read_size == 0) return 0;
 
-  if (file->src_buf_consumed == file->src_buf_size) {
-    // Refill source buffer
-    size_t src_read_size_wanted = (file->lz4_next_read_size > file->src_buf_size) ? file->src_buf_size : file->lz4_next_read_size;
-    size_t src_read_size = fread(file->src_buf, 1, src_read_size_wanted, file->src);
-    /* can be out because readSize == 0, which could be an fread() error */
-    if (ferror(file->src)) EXM_THROW(67, "Read error");
-    file->src_eof = (src_read_size == 0);
-    file->src_buf_consumed = 0;
+  size_t regenerated = 0;
+
+  while (file->lz4_next_read_size && regenerated < len) {
+
+    while (file->src_buf_consumed < file->src_buf_size && regenerated < len) {
+
+      size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
+      printf("lz4read: lz4_src_size = %d\n", lz4_src_size_in_consumed_out);
+      size_t lz4_dst_size_in_regenerated_out = len;
+      printf("lz4read: lz4_dst_size = %d\n", lz4_dst_size_in_regenerated_out);
+
+      file->lz4_next_read_size = LZ4F_decompress(file->ctx, buf, &lz4_dst_size_in_regenerated_out, (char*)(file->src_buf)+file->src_buf_consumed, &lz4_src_size_in_consumed_out, NULL);
+      if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
+
+      printf("lz4read: file->lz4_next_read_size = %d\n", file->lz4_next_read_size);
+      printf("lz4read: lz4_consumed = %d\n", lz4_src_size_in_consumed_out);
+      printf("lz4read: lz4_regenerated = %d\n", lz4_dst_size_in_regenerated_out);
+
+      file->src_buf_consumed += lz4_src_size_in_consumed_out;
+      regenerated += lz4_dst_size_in_regenerated_out;
+
+    }
+
+    if (file->lz4_next_read_size) {
+      size_t read_size = _fill_src_buf(file);
+      if (!read_size) break;
+    }
+
   }
 
-  // There's stuff left over in the source buffer to decompress
-  size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
-  size_t lz4_dst_size_in_regenerated_out = len;
-  file->lz4_next_read_size = LZ4F_decompress(file->ctx, buf, &lz4_dst_size_in_regenerated_out, (char*)(file->src_buf)+file->src_buf_consumed, &lz4_src_size_in_consumed_out, NULL);
-  file->src_buf_consumed += lz4_src_size_in_consumed_out;
-  if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
-  return lz4_dst_size_in_regenerated_out;
+  printf("Regenerated %d bytes\n", regenerated);
+
+  return regenerated;
 
 }
 
