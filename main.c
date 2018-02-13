@@ -7,7 +7,7 @@
 #include "lz4file.h"
 #include "seqtk.h"
 
-KSEQ_INIT(lz4File, lz4read, LZ4FILE_BUFFER_SIZE)
+KSEQ_INIT(lz4File, lz4read, 16384)
 
 typedef struct
 {

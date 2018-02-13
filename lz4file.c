@@ -30,7 +30,9 @@
   - The license of this source file is GPLv2.
 */
 
+#include <endian.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,63 +67,42 @@ static int g_displayLevel = 4;   /* 0 : no display  ; 1: errors  ; 2 : + result 
     exit(error);                                                          \
 }
 
-/***************************************
-*   Legacy Compression
-***************************************/
-
-static unsigned LZ4IO_readLE32 (const void* s)
-{
-    const unsigned char* const srcPtr = (const unsigned char*)s;
-    unsigned value32 = srcPtr[0];
-    value32 += (srcPtr[1]<<8);
-    value32 += (srcPtr[2]<<16);
-    value32 += ((unsigned)srcPtr[3])<<24;
-    return value32;
-}
-
-/* unoptimized version; solves endianess & alignment issues */
-static void LZ4IO_writeLE32(void* p, unsigned value32)
-{
-    unsigned char* dstPtr = (unsigned char*)p;
-    dstPtr[0] = (unsigned char)value32;
-    dstPtr[1] = (unsigned char)(value32 >> 8);
-    dstPtr[2] = (unsigned char)(value32 >> 16);
-    dstPtr[3] = (unsigned char)(value32 >> 24);
-}
-
 lz4File lz4open(const char *path, const char *mode) {
 
   lz4File file = (lz4File) calloc(1, sizeof(lz4file_t));
   file->src = fopen(path, mode);
-  if (file->src == NULL ) DISPLAYLEVEL(1, "%s: %s \n", path, strerror(errno));
+  if (file->src == NULL) {
+    DISPLAYLEVEL(1, "%s: %s \n", path, strerror(errno));
+  }
 
   /* init */
   LZ4F_errorCode_t error_code = LZ4F_createDecompressionContext(&(file->ctx), LZ4F_VERSION);
-  if (LZ4F_isError(error_code)) EXM_THROW(60, "Can't create LZ4F context : %s", LZ4F_getErrorName(error_code));
+  if (LZ4F_isError(error_code)) {
+    EXM_THROW(60, "Can't create LZ4F context : %s", LZ4F_getErrorName(error_code));
+  }
 
   /* Allocate Memory */
   file->src_buf_size = LZ4FILE_BUFFER_SIZE;
   file->src_buf = malloc(file->src_buf_size);
   if (!file->src_buf) EXM_THROW(61, "Allocation error : not enough memory");
 
-  unsigned char mn_store[MAGICNUMBER_SIZE];
+  size_t src_read_size = fread(file->src_buf, 1, MAGICNUMBER_SIZE, file->src);
+  file->src_eof = (src_read_size == 0);
 
-  size_t const nb_read_bytes = fread(mn_store, 1, MAGICNUMBER_SIZE, file->src);
-  if (nb_read_bytes == 0 || nb_read_bytes != MAGICNUMBER_SIZE) EXM_THROW(40, "Unrecognized header : Magic Number unreadable");
+  if (src_read_size != MAGICNUMBER_SIZE) {
+    EXM_THROW(40, "Unrecognized header : Magic Number unreadable");
+  }
 
-  if (LZ4IO_readLE32(mn_store) != LZ4IO_MAGICNUMBER) {
+  if (le32toh(*(uint32_t *)file->src_buf) != LZ4IO_MAGICNUMBER) {
     EXM_THROW(44,"Unrecognized header : file cannot be decoded");   /* Wrong magic number at the beginning of 1st stream */
   }
 
-  /* Init feed with magic number (already consumed from FILE* sFile) */
-  {
-      size_t in_size = MAGICNUMBER_SIZE;
-      char out[1];
-      size_t out_size = 0;
-      LZ4IO_writeLE32(file->src_buf, LZ4IO_MAGICNUMBER);
-      file->next_to_load = LZ4F_decompress(file->ctx, out, &out_size, file->src_buf, &in_size, NULL);
-      if (LZ4F_isError(file->next_to_load)) EXM_THROW(62, "Header error : %s", LZ4F_getErrorName(file->next_to_load));
-  }
+  file->src_buf_consumed = src_read_size;
+
+  size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
+  file->lz4_next_read_size = LZ4F_getFrameInfo(file->ctx, &(file->frame_info), (char*)(file->src_buf) + file->src_buf_consumed, &lz4_src_size_in_consumed_out);
+  file->src_buf_consumed += lz4_src_size_in_consumed_out;
+  if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(62, "Header error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
 
   return file;
 
@@ -129,43 +110,25 @@ lz4File lz4open(const char *path, const char *mode) {
 
 int lz4read(lz4File file, void *buf, unsigned int len) {
 
-  int num_bytes_read = 0;
+  if (file->src_eof && file->lz4_next_read_size == 0) return 0;
 
-  while(num_bytes_read < len && file->next_to_load) {
-
-    size_t read_size;
-    size_t pos = 0;
-    size_t decoded_bytes = len;
-
-    /* Read input */
-    if (file->next_to_load > file->src_buf_size) file->next_to_load = file->src_buf_size;
-    read_size = fread(file->src_buf, 1, file->next_to_load, file->src);
-    if (!read_size) break; /* reached end of file or stream */
-
-    while ((pos < read_size) || (decoded_bytes == len)) {  /* still to read, or still to flush */
-
-      /* Decode Input (at least partially) */
-      size_t remaining = read_size - pos;
-      decoded_bytes = len;
-      file->next_to_load = LZ4F_decompress(file->ctx, buf, &decoded_bytes, (char*)(file->src_buf)+pos, &remaining, NULL);
-      if (LZ4F_isError(file->next_to_load)) EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(file->next_to_load));
-      pos += remaining;
-
-      /* Write Block */
-      if (decoded_bytes) {
-        num_bytes_read += decoded_bytes;
-      }
-
-      if (!file->next_to_load) break;
-
-    }
-
+  if (file->src_buf_consumed == file->src_buf_size) {
+    // Refill source buffer
+    size_t src_read_size_wanted = (file->lz4_next_read_size > file->src_buf_size) ? file->src_buf_size : file->lz4_next_read_size;
+    size_t src_read_size = fread(file->src_buf, 1, src_read_size_wanted, file->src);
+    /* can be out because readSize == 0, which could be an fread() error */
+    if (ferror(file->src)) EXM_THROW(67, "Read error");
+    file->src_eof = (src_read_size == 0);
+    file->src_buf_consumed = 0;
   }
 
-  /* can be out because readSize == 0, which could be an fread() error */
-  if (ferror(file->src)) EXM_THROW(67, "Read error");
-
-  return num_bytes_read;
+  // There's stuff left over in the source buffer to decompress
+  size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
+  size_t lz4_dst_size_in_regenerated_out = len;
+  file->lz4_next_read_size = LZ4F_decompress(file->ctx, buf, &lz4_dst_size_in_regenerated_out, (char*)(file->src_buf)+file->src_buf_consumed, &lz4_src_size_in_consumed_out, NULL);
+  file->src_buf_consumed += lz4_src_size_in_consumed_out;
+  if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
+  return lz4_dst_size_in_regenerated_out;
 
 }
 
