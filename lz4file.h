@@ -6,19 +6,22 @@
 
 typedef struct {
   FILE *src;
-  bool src_eof;
-  void *src_buf;
-  size_t src_buf_size;
-  size_t src_buf_consumed;
+  bool eof;
+  char *compressed_buffer;
+  size_t compressed_buffer_size;
+  char *compressed_buffer_tail;
+  char *decompressed_buffer;
+  size_t decompressed_buffer_size;
+  char *decompressed_buffer_tail;
+  size_t decompressed_bytes;
   LZ4F_decompressionContext_t ctx;
   LZ4F_frameInfo_t frame_info;
-  LZ4F_errorCode_t lz4_next_read_size;
 } lz4file_t;
 
 typedef lz4file_t* lz4File;
 
 lz4File lz4open(const char *path, const char *mode);
-int lz4read(lz4File file, void *buf, unsigned int len);
+int lz4read(lz4File file, void *consumer_buffer, unsigned int consumer_buffer_size);
 void lz4close(lz4File file);
 
 #endif

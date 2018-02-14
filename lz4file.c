@@ -68,6 +68,97 @@ static int g_displayLevel = 4;   /* 0 : no display  ; 1: errors  ; 2 : + result 
     exit(error);                                                          \
 }
 
+size_t _refill_compressed_buffer(lz4File file) {
+  // Refill source buffer
+  size_t src_read_size = fread(file->compressed_buffer, 1, file->compressed_buffer_size, file->src);
+  // printf("_refill_compressed_buffer: src_read_size = %d\n", src_read_size);
+  /* can be out because readSize == 0, which could be an fread() error */
+  if (ferror(file->src)) {
+    EXM_THROW(67, "Read error");
+  }
+  file->compressed_buffer_tail = file->compressed_buffer;
+  return src_read_size;
+}
+
+size_t _read_from_compressed_buffer(lz4File file, void *consumer_buffer, size_t consumer_buffer_size) {
+
+  size_t bytes_copied = 0;
+
+  while (!file->eof && bytes_copied < consumer_buffer_size) {
+
+    size_t bytes_left_in_buffer = file->compressed_buffer_size - (file->compressed_buffer_tail - file->compressed_buffer);
+
+    if (bytes_left_in_buffer == 0) {
+      size_t compressed_read_size = _refill_compressed_buffer(file);
+      if (compressed_read_size == 0) {
+        return 0;
+      }
+      bytes_left_in_buffer = compressed_read_size;
+    }
+
+    size_t bytes_to_copy = (bytes_copied + bytes_left_in_buffer > consumer_buffer_size) ? bytes_left_in_buffer - consumer_buffer_size  : bytes_left_in_buffer;
+
+    size_t lz4_src_size_in_consumed_out = bytes_left_in_buffer;
+    size_t lz4_dst_size_in_regenerated_out = bytes_to_copy;
+
+//    printf("lz4read: lz4_src_size = %d\n", lz4_src_size_in_consumed_out);
+//    printf("lz4read: lz4_dst_size = %d\n", lz4_dst_size_in_regenerated_out);
+
+    LZ4F_errorCode_t lz4_error_code = LZ4F_decompress(file->ctx, consumer_buffer + bytes_copied, &lz4_dst_size_in_regenerated_out, file->compressed_buffer_tail, &lz4_src_size_in_consumed_out, NULL);
+    if (LZ4F_isError(lz4_error_code)) {
+      EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(lz4_error_code));
+    }
+
+    if (lz4_error_code == 0) {
+      file->eof = true;
+    }
+
+//    printf("_read_from_compressed_buffer: lz4_consumed = %d\n", lz4_src_size_in_consumed_out);
+//    printf("_read_from_compressed_buffer: lz4_regenerated = %d\n", lz4_dst_size_in_regenerated_out);
+
+    file->compressed_buffer_tail += lz4_src_size_in_consumed_out;
+    bytes_copied += lz4_dst_size_in_regenerated_out;
+
+  }
+
+  return bytes_copied;
+
+}
+
+size_t _refill_decompressed_buffer(lz4File file) {
+  size_t bytes_read = _read_from_compressed_buffer(file, file->decompressed_buffer, file->decompressed_buffer_size);
+  file->decompressed_buffer_tail = file->decompressed_buffer;
+  return bytes_read;
+}
+
+size_t _read_from_uncompressed_buffer(lz4File file, void *consumer_buffer, size_t consumer_buffer_size) {
+
+  size_t bytes_copied = 0;
+
+  while (!file->eof && bytes_copied < consumer_buffer_size) {
+
+    size_t bytes_left_in_buffer = file->decompressed_buffer_size - (file->decompressed_buffer_tail - file->decompressed_buffer);
+
+    if (bytes_left_in_buffer == 0) {
+      size_t decompressed_read_size = _refill_decompressed_buffer(file);
+      if (decompressed_read_size == 0) {
+        return 0;
+      }
+      bytes_left_in_buffer = decompressed_read_size;
+    }
+
+    size_t bytes_to_copy = (bytes_copied + bytes_left_in_buffer > consumer_buffer_size) ? bytes_left_in_buffer - consumer_buffer_size  : bytes_left_in_buffer;
+
+    memcpy(consumer_buffer + bytes_copied, file->decompressed_buffer_tail, bytes_to_copy);
+    file->decompressed_buffer_tail += bytes_to_copy;
+    bytes_copied += bytes_to_copy;
+
+  }
+
+  return bytes_copied;
+
+}
+
 lz4File lz4open(const char *path, const char *mode) {
 
   lz4File file = (lz4File) calloc(1, sizeof(lz4file_t));
@@ -83,84 +174,56 @@ lz4File lz4open(const char *path, const char *mode) {
   }
 
   /* Allocate Memory */
-  file->src_buf_size = LZ4FILE_BUFFER_SIZE;
-  file->src_buf = malloc(file->src_buf_size);
-  file->src_buf_consumed = 0;
-
-  if (!file->src_buf) EXM_THROW(61, "Allocation error : not enough memory");
-
-  size_t src_read_size = fread(file->src_buf, 1, file->src_buf_size, file->src);
-  file->src_eof = (src_read_size == 0);
-
-  if (src_read_size < MAGICNUMBER_SIZE) {
-    EXM_THROW(40, "Unrecognized header : Magic Number unreadable");
+  file->compressed_buffer_size = LZ4FILE_BUFFER_SIZE;
+  file->compressed_buffer = calloc(file->compressed_buffer_size, sizeof(char));
+  file->compressed_buffer_tail = file->compressed_buffer + file->compressed_buffer_size;
+  file->decompressed_buffer_size = LZ4FILE_BUFFER_SIZE;
+  file->decompressed_buffer = calloc(file->decompressed_buffer_size, sizeof(char));
+  file->decompressed_buffer_tail = file->decompressed_buffer + file->decompressed_buffer_size;
+  if (!file->compressed_buffer || !file->decompressed_buffer) {
+    EXM_THROW(61, "Allocation error : not enough memory");
   }
 
-  if (le32toh(*(uint32_t *)file->src_buf) != LZ4IO_MAGICNUMBER) {
-    EXM_THROW(44,"Unrecognized header : file cannot be decoded");   /* Wrong magic number at the beginning of 1st stream */
-  }
+//  unsigned char magic_number[MAGICNUMBER_SIZE];
+//  size_t compressed_read_size = _read_from_compressed_buffer(file, magic_number, MAGICNUMBER_SIZE);
 
-  size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
-  file->lz4_next_read_size = LZ4F_getFrameInfo(file->ctx, &(file->frame_info), (char*)(file->src_buf) + file->src_buf_consumed, &lz4_src_size_in_consumed_out);
-  file->src_buf_consumed += lz4_src_size_in_consumed_out;
-  if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(62, "Header error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
+//  printf("%d\n", compressed_read_size);
+//  printf("%s\n", magic_number);
+
+//  if (compressed_read_size < MAGICNUMBER_SIZE || le32toh(*(uint32_t *) magic_number) != LZ4IO_MAGICNUMBER) {
+//    EXM_THROW(44,"Unrecognized header : file cannot be decoded");   /* Wrong magic number at the beginning of 1st stream */
+//  }
+
+//  size_t lz4_src_size_in_consumed_out = file->compressed_buffer_size - (file->compressed_buffer_tail - file->compressed_buffer);
+//  LZ4F_errorCode_t lz4_error_code = LZ4F_getFrameInfo(file->ctx, &(file->frame_info), file->compressed_buffer_tail, &lz4_src_size_in_consumed_out);
+//  if (LZ4F_isError(lz4_error_code)) {
+//    EXM_THROW(62, "Header error : %s", LZ4F_getErrorName(lz4_error_code));
+//  }
+
+//  file->compressed_buffer_tail += lz4_src_size_in_consumed_out;
 
   return file;
 
 }
 
-size_t _fill_src_buf(lz4File file) {
-  // Refill source buffer
-  size_t src_read_size_wanted = (file->lz4_next_read_size > file->src_buf_size) ? file->src_buf_size : file->lz4_next_read_size;
-  printf("_file_src_buf: src_read_size_wanted = %d\n", src_read_size_wanted);
-  size_t src_read_size = fread(file->src_buf, 1, src_read_size_wanted, file->src);
-  printf("_file_src_buf: src_read_size = %d\n", src_read_size);
-  /* can be out because readSize == 0, which could be an fread() error */
-  if (ferror(file->src)) EXM_THROW(67, "Read error");
-  file->src_eof = (src_read_size == 0);
-  file->src_buf_consumed = 0;
-  return src_read_size;
-}
+int lz4read(lz4File file, void *consumer_buffer, unsigned int consumer_buffer_size) {
 
-int lz4read(lz4File file, void *buf, unsigned int len) {
-
-  printf("\n\nlz4read: called\n");
-
-  if (file->src_eof && file->lz4_next_read_size == 0) return 0;
-
-  size_t regenerated = 0;
-
-  while (file->lz4_next_read_size && regenerated < len) {
-
-    while (file->src_buf_consumed < file->src_buf_size && regenerated < len) {
-
-      size_t lz4_src_size_in_consumed_out = file->src_buf_size - file->src_buf_consumed;
-      printf("lz4read: lz4_src_size = %d\n", lz4_src_size_in_consumed_out);
-      size_t lz4_dst_size_in_regenerated_out = len;
-      printf("lz4read: lz4_dst_size = %d\n", lz4_dst_size_in_regenerated_out);
-
-      file->lz4_next_read_size = LZ4F_decompress(file->ctx, buf, &lz4_dst_size_in_regenerated_out, (char*)(file->src_buf)+file->src_buf_consumed, &lz4_src_size_in_consumed_out, NULL);
-      if (LZ4F_isError(file->lz4_next_read_size)) EXM_THROW(66, "Decompression error : %s", LZ4F_getErrorName(file->lz4_next_read_size));
-
-      printf("lz4read: file->lz4_next_read_size = %d\n", file->lz4_next_read_size);
-      printf("lz4read: lz4_consumed = %d\n", lz4_src_size_in_consumed_out);
-      printf("lz4read: lz4_regenerated = %d\n", lz4_dst_size_in_regenerated_out);
-
-      file->src_buf_consumed += lz4_src_size_in_consumed_out;
-      regenerated += lz4_dst_size_in_regenerated_out;
-
-    }
-
-    if (file->lz4_next_read_size) {
-      size_t read_size = _fill_src_buf(file);
-      if (!read_size) break;
-    }
-
+  if (file->eof) {
+    return 0;
   }
 
-  printf("Regenerated %d bytes\n", regenerated);
+  size_t total_data_read = 0;
+  size_t data_read = 0;
 
-  return regenerated;
+  while(total_data_read < consumer_buffer_size && (data_read = _read_from_uncompressed_buffer(file, consumer_buffer, consumer_buffer_size)) > 0) {
+    total_data_read += data_read;
+  };
+
+  if (data_read == 0) {
+    file->eof = true;
+  }
+
+  return data_read;
 
 }
 
@@ -168,7 +231,7 @@ void lz4close(lz4File file) {
 
   LZ4F_errorCode_t error_code = LZ4F_freeDecompressionContext(file->ctx);
   if (LZ4F_isError(error_code)) EXM_THROW(69, "Error : can't free LZ4F context resource : %s", LZ4F_getErrorName(error_code));
-  free(file->src_buf);
+  free(file->compressed_buffer);
 
   fclose(file->src);
   free(file);

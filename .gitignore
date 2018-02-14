@@ -3,3 +3,6 @@ leftpad_assembler.creator
 leftpad_assembler.creator.user
 leftpad_assembler.files
 leftpad_assembler.includes
+lz4frame.h
+lz4io.c
+lz4stream.c
