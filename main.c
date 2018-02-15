@@ -1,7 +1,7 @@
-#include <zlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include "zstd/zlibWrapper/zstd_zlibwrapper.h"
 #include "kseq.h"
 #include "kvec.h"
 #include "seqtk.h"
