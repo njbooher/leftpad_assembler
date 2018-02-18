@@ -28,6 +28,7 @@
 #ifndef AC_KSEQ_H
 #define AC_KSEQ_H
 
+#include <mm_malloc.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
@@ -121,9 +122,13 @@ typedef struct __kstring_t {
 					if (isspace(ks->buf[i]) && ks->buf[i] != ' ') break; \
 			} else i = 0; /* never come to here! */						\
 			if (str->m - str->l < (size_t)(i - ks->begin + 1)) {		\
+				size_t old_m = str->m;\
 				str->m = str->l + (i - ks->begin) + 1;					\
 				kroundup32(str->m);										\
-				str->s = (char*)realloc(str->s, str->m);				\
+				char *tmp = _mm_malloc(str->m, 16);\
+				memcpy(tmp, str->s, old_m);\
+				_mm_free(str->s);\
+				str->s = tmp;\
 			}															\
 			gotany = 1;													\
 			memcpy(str->s + str->l, ks->buf + ks->begin, i - ks->begin); \
@@ -163,7 +168,7 @@ typedef struct __kstring_t {
 	SCOPE void kseq_destroy(kseq_t *ks)									\
 	{																	\
 		if (!ks) return;												\
-		free(ks->name.s); free(ks->comment.s); free(ks->seq.s);	free(ks->qual.s); \
+		_mm_free(ks->name.s); _mm_free(ks->comment.s); _mm_free(ks->seq.s);	_mm_free(ks->qual.s); \
 		ks_destroy(ks->f);												\
 		free(ks);														\
 	}
@@ -189,7 +194,7 @@ typedef struct __kstring_t {
 		if (c != '\n') ks_getuntil(ks, KS_SEP_LINE, &seq->comment, 0); /* read FASTA/Q comment */ \
 		if (seq->seq.s == 0) { /* we can do this in the loop below, but that is slower */ \
 			seq->seq.m = 256; \
-			seq->seq.s = (char*)malloc(seq->seq.m); \
+			seq->seq.s = (char*)_mm_malloc(seq->seq.m, 16); \
 		} \
 		while ((c = ks_getc(ks)) >= 0 && c != '>' && c != '+' && c != '@') { \
 			if (c == '\n') continue; /* skip empty lines */ \
