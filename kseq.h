@@ -54,7 +54,7 @@
 	{																\
 		kstream_t *ks = (kstream_t*)calloc(1, sizeof(kstream_t));	\
 		ks->f = f;													\
-		ks->buf = (unsigned char*)malloc(__bufsize);				\
+		ks->buf = (unsigned char*)_mm_malloc(__bufsize, 64);				\
 		return ks;													\
 	}																\
 	static inline void ks_destroy(kstream_t *ks)					\
@@ -125,7 +125,7 @@ typedef struct __kstring_t {
 				size_t old_m = str->m;\
 				str->m = str->l + (i - ks->begin) + 1;					\
 				kroundup32(str->m);										\
-				char *tmp = _mm_malloc(str->m, 16);\
+				char *tmp = _mm_malloc(str->m, 64);\
 				memcpy(tmp, str->s, old_m);\
 				_mm_free(str->s);\
 				str->s = tmp;\
@@ -142,7 +142,8 @@ typedef struct __kstring_t {
 		if (!gotany && ks_eof(ks)) return -1;							\
 		if (str->s == 0) {												\
 			str->m = 1;													\
-			str->s = (char*)calloc(1, 1);								\
+			str->s = (char*) _mm_malloc(1, 64);\
+			str->s[0] = '\0';\
 		} else if (delimiter == KS_SEP_LINE && str->l > 1 && str->s[str->l-1] == '\r') --str->l; \
 		str->s[str->l] = '\0';											\
 		return str->l;													\
@@ -194,7 +195,7 @@ typedef struct __kstring_t {
 		if (c != '\n') ks_getuntil(ks, KS_SEP_LINE, &seq->comment, 0); /* read FASTA/Q comment */ \
 		if (seq->seq.s == 0) { /* we can do this in the loop below, but that is slower */ \
 			seq->seq.m = 256; \
-			seq->seq.s = (char*)_mm_malloc(seq->seq.m, 16); \
+			seq->seq.s = (char*)_mm_malloc(seq->seq.m, 64); \
 		} \
 		while ((c = ks_getc(ks)) >= 0 && c != '>' && c != '+' && c != '@') { \
 			if (c == '\n') continue; /* skip empty lines */ \
@@ -203,15 +204,23 @@ typedef struct __kstring_t {
 		} \
 		if (c == '>' || c == '@') seq->last_char = c; /* the first header char has been read */	\
 		if (seq->seq.l + 1 >= seq->seq.m) { /* seq->seq.s[seq->seq.l] below may be out of boundary */ \
+			size_t old_m = seq->seq.m;\
 			seq->seq.m = seq->seq.l + 2; \
 			kroundup32(seq->seq.m); /* rounded to the next closest 2^k */ \
-			seq->seq.s = (char*)realloc(seq->seq.s, seq->seq.m); \
+			char *tmp = _mm_malloc(seq->seq.m, 64);\
+			memcpy(tmp, seq->seq.s, old_m);\
+			_mm_free(seq->seq.s);\
+			seq->seq.s = tmp;\
 		} \
 		seq->seq.s[seq->seq.l] = 0;	/* null terminated string */ \
 		if (c != '+') return seq->seq.l; /* FASTA */ \
 		if (seq->qual.m < seq->seq.m) {	/* allocate memory for qual in case insufficient */ \
+			size_t old_m = seq->qual.m;\
 			seq->qual.m = seq->seq.m; \
-			seq->qual.s = (char*)realloc(seq->qual.s, seq->qual.m); \
+			char *tmp = _mm_malloc(seq->qual.m, 64);\
+			memcpy(tmp, seq->qual.s, old_m);\
+			_mm_free(seq->qual.s);\
+			seq->qual.s = tmp;\
 		} \
 		while ((c = ks_getc(ks)) >= 0 && c != '\n'); /* skip the rest of '+' line */ \
 		if (c == -1) return -2; /* error: no quality string */ \

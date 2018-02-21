@@ -1,4 +1,4 @@
-#include <nmmintrin.h>
+#include <immintrin.h>
 #include <mm_malloc.h>
 #include <zlib.h>
 #include <stdio.h>
@@ -32,21 +32,19 @@ int main(int argc, char *argv[]) {
 
   uint8_t anchor_str_len = strlen(argv[2]);
 
-  if (anchor_str_len > 127) {
+  if (anchor_str_len > 63) {
     exit(1);
   }
 
-  char *anchor_str = _mm_malloc(128 * sizeof(char), 16);
+  char *anchor_str = _mm_malloc(64 * sizeof(char), 64);
   memcpy(anchor_str, argv[2], anchor_str_len);
   anchor_str[anchor_str_len] = '\0';
-  __m128i packed_anchor_str = _mm_load_si128(anchor_str);
+//  __m512i packed_anchor_str = _mm512_load_si512(anchor_str);
 
-//  char *rev_anchor_str = _mm_malloc(128 * sizeof(char), 16);
+//  char *rev_anchor_str = _mm_malloc(128 * sizeof(char), 64);
 //  memcpy(rev_anchor_str, anchor_str, anchor_str_len);
 //  reverse_complement(rev_anchor_str, anchor_str_len);
-//  __m128i packed_rev_anchor_str = _mm_load_si128(rev_anchor_str);
-
-  const int imm = _SIDD_UBYTE_OPS | _SIDD_CMP_EQUAL_ORDERED | _SIDD_BIT_MASK;
+//  __m512i packed_rev_anchor_str = _mm_load_si128(rev_anchor_str);
 
   gzFile input_file = gzopen(argv[1], "r");
   kseq_t *seq = kseq_init(input_file);
@@ -58,9 +56,10 @@ int main(int argc, char *argv[]) {
 
   while (kseq_read(seq) >= 0) {
 
-//    __m128i haystack = _mm_load_si128(seq->seq.s);
+    __m512i haystack = _mm512_and_si512(_mm512_load_si512(seq->seq.s), _mm512_set1_epi8(6));
 
-    int anchor_pos = _mm_cmpestri(_mm_load_si128(seq->seq.s), 128, packed_anchor_str, anchor_str_len, imm);
+
+    //int anchor_pos = _mm_cmpestri(_mm_load_si128(seq->seq.s), 128, packed_anchor_str, anchor_str_len, _SIDD_UBYTE_OPS | _SIDD_CMP_EQUAL_ORDERED | _SIDD_BIT_MASK);
 //    int anchor_pos2 = _mm_cmpestri(_mm_load_si128(seq->seq.s + 128), 128, packed_anchor_str, anchor_str_len, imm);
 
 //    int anchor_pos = anchor_pos1;
